@@ -63,6 +63,17 @@ export const complianceService = {
     return items;
   },
 
+  async getComplianceForms(clubId) {
+    try {
+      const formsRef = collection(db, 'clubs', clubId, 'complianceForms');
+      const snap = await getDocs(query(formsRef, orderBy('createdAt', 'desc')));
+      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    } catch (err) {
+      console.error('Error fetching compliance forms:', err);
+      return [];
+    }
+  },
+
   async updateComplianceStatus(clubId, id, status, notes = '') {
     // Try updating subcollection doc first
     try {

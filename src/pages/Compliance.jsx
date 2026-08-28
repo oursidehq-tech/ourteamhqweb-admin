@@ -14,6 +14,7 @@ const Compliance = () => {
   const [showModal, setShowModal] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [complianceData, setComplianceData] = useState([]);
+  const [complianceForms, setComplianceForms] = useState([]);
   const [isUpdating, setIsUpdating] = useState(false);
   const [showFormModal, setShowFormModal] = useState(false);
   const [newForm, setNewForm] = useState({ title: '', type: 'Certificate', expiryRequired: true });
@@ -30,6 +31,7 @@ const Compliance = () => {
       });
       setShowFormModal(false);
       setNewForm({ title: '', type: 'Certificate', expiryRequired: true });
+      loadCompliance();
       alert('Compliance form created successfully!');
     } catch (err) {
       alert('Error creating form: ' + err.message);
@@ -49,6 +51,8 @@ const Compliance = () => {
     try {
       const data = await complianceService.getStaffCompliance(selectedClubId);
       setComplianceData(data);
+      const forms = await complianceService.getComplianceForms(selectedClubId);
+      setComplianceForms(forms);
     } catch (error) {
       console.error('Error loading compliance:', error);
     } finally {
@@ -125,6 +129,13 @@ const Compliance = () => {
         </span>
       )
     }
+  ];
+
+  const formColumns = [
+    { header: 'Form Title', accessor: 'title', render: (val) => <div style={{ fontWeight: 600 }}>{val}</div> },
+    { header: 'Document Type', accessor: 'type', render: (val) => <span className="badge badge-info">{val}</span> },
+    { header: 'Requires Expiry', accessor: 'expiryRequired', render: (val) => val ? 'Yes' : 'No' },
+    { header: 'Created', accessor: 'createdAt', render: (val) => val?.toDate?.().toLocaleDateString() || 'N/A' },
   ];
 
   const actions = [
@@ -214,16 +225,30 @@ const Compliance = () => {
             <AlertCircle size={16} />
             Expired
           </button>
+          <button className={`tab ${activeTab === 'forms' ? 'active' : ''}`} onClick={() => setActiveTab('forms')}>
+            <FileText size={16} />
+            Custom Forms
+          </button>
         </div>
       </div>
 
-      <DataTable 
-        title="Staff Documentation"
-        columns={columns}
-        data={filteredData}
-        actions={actions}
-        loading={loading}
-      />
+      {activeTab === 'forms' ? (
+        <DataTable 
+          title="Custom Compliance Forms"
+          columns={formColumns}
+          data={complianceForms}
+          loading={loading}
+          emptyMessage="No custom forms created yet"
+        />
+      ) : (
+        <DataTable 
+          title="Staff Documentation"
+          columns={columns}
+          data={filteredData}
+          actions={actions}
+          loading={loading}
+        />
+      )}
 
       <Modal 
         title="Document Review" 
