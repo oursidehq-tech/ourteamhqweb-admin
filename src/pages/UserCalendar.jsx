@@ -273,8 +273,57 @@ export default function UserCalendar() {
     });
   };
 
+  // ─── Google Calendar style helpers ─────────────────────────────
+  // Categorise an aggregated calendar item into a display "kind"
+  const itemKind = (item) => {
+    if (item.itemType === 'task') return 'task';
+    if (item.itemType === 'shift') return 'shift';
+    if (item.itemType === 'event') {
+      return (item.type === 'match' || item.type === 'game') ? 'match' : 'training';
+    }
+    return 'other';
+  };
+
+  const KIND_STYLES = {
+    match:    { bg: '#fef3c7', bar: '#f59e0b', text: '#92400e', label: 'Match' },
+    training: { bg: '#dbeafe', bar: '#3b82f6', text: '#1e40af', label: 'Training' },
+    shift:    { bg: '#d1fae5', bar: '#10b981', text: '#065f46', label: 'Shift' },
+    task:     { bg: '#fee2e2', bar: '#ef4444', text: '#991b1b', label: 'Task' },
+    other:    { bg: '#e2e8f0', bar: '#64748b', text: '#334155', label: 'Event' },
+  };
+
+  const itemTitle = (item) => item.title || item.role || item.rosterTitle || 'Untitled';
+  const itemTime = (item) => item.time || (item.startTime ? `${item.startTime}${item.endTime ? `–${item.endTime}` : ''}` : '');
+
+  // Returns only the items that pass the current filter (used for cell chips)
+  const filteredItemsForDate = (date) =>
+    getItemsForDate(date).filter(item => {
+      if (activeFilter === 'All') return true;
+      if (activeFilter === 'Matches') return item.itemType === 'event' && (item.type === 'match' || item.type === 'game');
+      if (activeFilter === 'Training') return item.itemType === 'event' && item.type === 'training';
+      if (activeFilter === 'Shifts') return item.itemType === 'shift';
+      if (activeFilter === 'Tasks') return item.itemType === 'task';
+      return true;
+    });
+
+  const goToToday = () => {
+    const now = new Date();
+    setCurrentDate(now);
+    setSelectedDate(now);
+  };
+
+  // Open the appropriate details modal when a chip is clicked
+  const handleItemClick = (item, e) => {
+    e?.stopPropagation();
+    if (item.itemType === 'event') {
+      setSelectedEventDetails(item);
+    } else {
+      setSelectedDate(new Date(item.date));
+    }
+  };
+
   return (
-    <div style={{ maxWidth: '1000px', margin: '0 auto', padding: '24px' }}>
+    <div style={{ maxWidth: '1500px', margin: '0 auto', padding: '24px' }}>
       
       {/* Page Header */}
       <div className="page-header" style={{ marginBottom: '24px' }}>
@@ -308,17 +357,80 @@ export default function UserCalendar() {
         ))}
       </div>
 
-      {/* Grid: Left Calendar / Right Selected Day Agenda */}
-      <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
+      {/* Colour Legend — pinned at the top so meanings are visible without scrolling */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '10px',
+          marginBottom: '20px',
+          padding: '12px 16px',
+          background: '#ffffff',
+          border: '1px solid var(--border)',
+          borderRadius: '14px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+        }}
+      >
+        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginRight: '4px', alignSelf: 'center' }}>
+          Colour key:
+        </span>
+        {[
+          { kind: 'match', label: 'Matches' },
+          { kind: 'training', label: 'Training' },
+          { kind: 'shift', label: 'Duties / Shifts' },
+          { kind: 'task', label: 'My Tasks' },
+        ].map(({ kind, label }) => {
+          const style = KIND_STYLES[kind];
+          return (
+            <span
+              key={kind}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: style.bg,
+                color: style.text,
+                borderLeft: `4px solid ${style.bar}`,
+                borderRadius: '8px',
+                padding: '4px 12px',
+                fontSize: '12px',
+                fontWeight: 600
+              }}
+            >
+              {label}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Grid: Full-width month calendar, agenda below */}
+      <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '24px' }}>
         
         {/* Left Card: Month Grid Calendar */}
         <div className="card shadow-sm" style={{ border: '1px solid var(--border)', background: '#ffffff', borderRadius: '16px', padding: '20px' }}>
           
           {/* Calendar Header Controls */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-            <h3 style={{ margin: 0, fontWeight: 800, fontSize: '18px', color: 'var(--text)' }}>
-              {monthNames[month]} {year}
-            </h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <h3 style={{ margin: 0, fontWeight: 800, fontSize: '18px', color: 'var(--text)' }}>
+                {monthNames[month]} {year}
+              </h3>
+              <button
+                onClick={goToToday}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border)',
+                  background: '#ffffff',
+                  color: 'var(--text-secondary)',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Today
+              </button>
+            </div>
             <div style={{ display: 'flex', gap: '4px' }}>
               <button onClick={prevMonth} className="btn-icon" style={{ padding: '6px', border: '1px solid var(--border)', borderRadius: '8px' }}>
                 <ChevronLeft size={16} />
@@ -337,78 +449,93 @@ export default function UserCalendar() {
           {/* Days Grid */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '6px' }}>
             {days.map((date, idx) => {
-              if (!date) return <div key={`empty-${idx}`} style={{ height: '55px' }} />;
+              if (!date) return <div key={`empty-${idx}`} style={{ minHeight: '132px' }} />;
               const isSel = isSelected(date);
               const isTdy = isToday(date);
-              const hasMatch = hasItem(date, 'match');
-              const hasTrain = hasItem(date, 'training');
-              const hasShift = hasItem(date, 'shift');
-              const hasTask = hasItem(date, 'task');
+              const dayItems = filteredItemsForDate(date);
+              const maxChips = 3;
 
               return (
                 <button
                   key={`day-${idx}`}
                   onClick={() => setSelectedDate(date)}
                   style={{
-                    height: '55px',
+                    minHeight: '132px',
                     display: 'flex',
                     flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '6px',
+                    alignItems: 'stretch',
+                    padding: '6px 7px',
                     border: '1px solid',
                     borderColor: isSel ? 'var(--primary)' : 'var(--border-light, #f1f5f9)',
                     borderRadius: '12px',
-                    background: isSel 
-                      ? 'rgba(16, 185, 129, 0.08)' 
-                      : (isTdy ? '#f1f5f9' : '#ffffff'),
-                    color: isSel ? 'var(--primary)' : 'var(--text)',
-                    fontWeight: isSel || isTdy ? 700 : 500,
+                    background: isSel
+                      ? 'rgba(16, 185, 129, 0.08)'
+                      : (isTdy ? '#f8fafc' : '#ffffff'),
+                    color: 'var(--text)',
                     fontSize: '13px',
                     cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    position: 'relative'
+                    transition: 'all 0.15s',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    textAlign: 'left'
                   }}
                 >
+                  {/* Day number */}
                   <span style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    width: '20px',
+                    alignSelf: 'flex-start',
+                    minWidth: '20px',
                     height: '20px',
+                    padding: '0 5px',
                     borderRadius: '50%',
+                    fontSize: '12px',
+                    fontWeight: isSel || isTdy ? 700 : 500,
                     background: isTdy && !isSel ? 'var(--primary)' : 'none',
-                    color: isTdy && !isSel ? '#ffffff' : 'inherit'
+                    color: isTdy && !isSel ? '#ffffff' : (isSel ? 'var(--primary)' : 'inherit')
                   }}>
                     {date.getDate()}
                   </span>
 
-                  {/* Indicator Dots */}
-                  <div style={{ display: 'flex', gap: '3px', justifyContent: 'center', width: '100%' }}>
-                    {hasMatch && <span style={{ width: '5px', height: '5px', borderRadius: '50%', backgroundColor: '#f59e0b' }} title="Match" />}
-                    {hasTrain && <span style={{ width: '5px', height: '5px', borderRadius: '50%', backgroundColor: '#3b82f6' }} title="Training" />}
-                    {hasShift && <span style={{ width: '5px', height: '5px', borderRadius: '50%', backgroundColor: '#10b981' }} title="Shift" />}
-                    {hasTask && <span style={{ width: '5px', height: '5px', borderRadius: '50%', backgroundColor: '#ef4444' }} title="Task" />}
+                  {/* Google-Calendar style event chips */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '3px', width: '100%', overflow: 'hidden' }}>
+                    {dayItems.slice(0, maxChips).map((item, i) => {
+                      const style = KIND_STYLES[itemKind(item)];
+                      return (
+                        <span
+                          key={`chip-${i}`}
+                          onClick={(e) => handleItemClick(item, e)}
+                          title={`${style.label}: ${itemTitle(item)}${itemTime(item) ? ` (${itemTime(item)})` : ''}`}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            background: style.bg,
+                            color: style.text,
+                            borderRadius: '4px',
+                            borderLeft: `3px solid ${style.bar}`,
+                            padding: '2px 5px',
+                            fontSize: '10.5px',
+                            fontWeight: 600,
+                            lineHeight: 1.3,
+                            whiteSpace: 'normal',
+                            wordBreak: 'break-word',
+                            textAlign: 'left'
+                          }}
+                        >
+                          {itemTitle(item)}
+                        </span>
+                      );
+                    })}
+                    {dayItems.length > maxChips && (
+                      <span style={{ fontSize: '9.5px', fontWeight: 700, color: 'var(--text-secondary)', paddingLeft: '2px' }}>
+                        +{dayItems.length - maxChips} more
+                      </span>
+                    )}
                   </div>
                 </button>
               );
             })}
-          </div>
-
-          {/* Legend Banner */}
-          <div style={{ borderTop: '1px solid var(--border)', marginTop: '20px', paddingTop: '12px', display: 'flex', justifyContent: 'center', gap: '16px', fontSize: '11px', flexWrap: 'wrap' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'var(--text-secondary)' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#f59e0b' }} /> Matches
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'var(--text-secondary)' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6' }} /> Training
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'var(--text-secondary)' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#10b981' }} /> Duties/Shifts
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'var(--text-secondary)' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#ef4444' }} /> My Tasks
-            </span>
           </div>
 
         </div>

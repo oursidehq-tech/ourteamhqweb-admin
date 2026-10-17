@@ -2781,3 +2781,48 @@ tr.clickable-row:hover td {
   cursor: pointer;
   border-radius: 4px;
 }
+
+/* ── Calendar (Admin & Member) responsive styling ── */
+.admin-cal-cell {
+  transition: all 0.15s ease;
+}
+.admin-cal-cell:hover {
+  border-color: var(--primary) !important;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.12);
+}
+.admin-cal-cell-empty {
+  min-height: 132px;
+  border-radius: 12px;
+}
+
+@media (max-width: 1024px) {
+  .admin-cal-cell,
+  .admin-cal-cell-empty {
+    min-height: 108px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .admin-cal-weekdays {
+    font-size: 10px !important;
+  }
+  .admin-cal-grid {
+    gap: 3px !important;
+  }
+  .admin-cal-cell,
+  .admin-cal-cell-empty {
+    min-height: 74px !important;
+    padding: 3px 4px !important;
+    border-radius: 8px !important;
+  }
+  .admin-cal-cell span[title] {
+    font-size: 9px !important;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-cal-cell,
+  .admin-cal-cell-empty {
+    min-height: 58px !important;
+  }
+}
