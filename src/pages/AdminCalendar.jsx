@@ -3,10 +3,20 @@ import { useNavigate } from 'react-router-dom';
 import { collection, getDocs, query, orderBy } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useClub } from '../context/ClubContext';
+import Modal from '../components/Modal';
 import {
   ChevronLeft, ChevronRight, Calendar, MapPin, Clock, Users,
-  Plus, RefreshCw, Trophy, Dumbbell, PartyPopper, Handshake
+  Plus, RefreshCw, Trophy, Dumbbell, PartyPopper, Handshake,
+  Repeat, AlignLeft, Tag, CalendarDays, X
 } from 'lucide-react';
+import {
+  buildOccurrenceDates,
+  describeRecurrence,
+  hasRecurrence,
+  todayIsoDate,
+  toIsoDateLocal,
+  parseIsoDate,
+} from '../utils/recurrence';
 
 // Colour + label configuration per event type (shared look with the member calendar)
 const TYPE_STYLES = {
@@ -25,6 +35,23 @@ const monthNames = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const formatLongDate = (isoDate) => {
+  const d = parseIsoDate(isoDate);
+  if (!d) return 'Date TBC';
+  return `${WEEKDAY_SHORT[d.getDay()]}, ${d.getDate()} ${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`;
+};
+
+const formatTime = (item) => {
+  if (item?.isAllDay) return 'All Day';
+  const start = item?.startTime || item?.time || '';
+  const end = item?.endTime || '';
+  if (!start) return 'TBA';
+  return end ? `${start} – ${end}` : start;
+};
+
 export default function AdminCalendar() {
   const { selectedClubId, selectedClub } = useClub();
   const navigate = useNavigate();
@@ -34,6 +61,7 @@ export default function AdminCalendar() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeFilter, setActiveFilter] = useState('All');
+  const [selectedItem, setSelectedItem] = useState(null);
 
   const fetchEvents = async () => {
     if (!selectedClubId) { setLoading(false); return; }
@@ -66,37 +94,13 @@ export default function AdminCalendar() {
   for (let i = 0; i < firstDayOfMonth; i++) days.push(null);
   for (let i = 1; i <= daysInMonth; i++) days.push(new Date(year, month, i));
 
-  const formatDateKey = (date) => {
-    if (!date) return '';
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${date.getFullYear()}-${m}-${d}`;
-  };
+  const formatDateKey = (date) => (date ? toIsoDateLocal(date) : '');
 
   const isToday = (date) =>
-    !!date &&
-    date.getDate() === new Date().getDate() &&
-    date.getMonth() === new Date().getMonth() &&
-    date.getFullYear() === new Date().getFullYear();
+    !!date && formatDateKey(date) === todayIsoDate();
 
   const isSelected = (date) =>
-    !!date &&
-    date.getDate() === selectedDate.getDate() &&
-    date.getMonth() === selectedDate.getMonth() &&
-    date.getFullYear() === selectedDate.getFullYear();
-
-  const eventDate = (e) => e.date || e.startDate || '';
-
-  // Events grouped by their YYYY-MM-DD key
-  const eventsByDate = useMemo(() => {
-    const map = {};
-    events.forEach(e => {
-      const key = eventDate(e);
-      if (!key) return;
-      (map[key] = map[key] || []).push(e);
-    });
-    return map;
-  }, [events]);
+    !!date && formatDateKey(date) === formatDateKey(selectedDate);
 
   const passesFilter = (e) => {
     if (activeFilter === 'All') return true;
@@ -108,6 +112,61 @@ export default function AdminCalendar() {
     if (activeFilter === 'Other') return !['match', 'game', 'training', 'social', 'meeting'].includes(t);
     return true;
   };
+
+  // ─── Recurrence expansion ───────────────────────────────────────
+  // Expand every event (including recurring ones) into dated occurrences
+  // covering the visible month, so recurring events appear on every
+  // matching day instead of only on their anchor date.
+  const monthRangeStart = useMemo(
+    () => toIsoDateLocal(new Date(year, month, 1)),
+    [year, month]
+  );
+  const monthRangeEnd = useMemo(
+    () => toIsoDateLocal(new Date(year, month, daysInMonth)),
+    [year, month, daysInMonth]
+  );
+
+  const occurrences = useMemo(() => {
+    const out = [];
+    (events || []).forEach((event) => {
+      const baseDate = event.startDate || event.date;
+      if (!baseDate) return;
+      const dates = buildOccurrenceDates(
+        baseDate,
+        event.recurringRule,
+        monthRangeStart,
+        monthRangeEnd,
+        { endDate: event.endDate || event.date }
+      );
+      dates.forEach((occurrenceDate) => {
+        out.push({
+          ...event,
+          occurrenceDate,
+          isRecurring: hasRecurrence(event.recurringRule),
+        });
+      });
+    });
+    return out;
+  }, [events, monthRangeStart, monthRangeEnd]);
+
+  // Occurrences grouped by their YYYY-MM-DD key
+  const eventsByDate = useMemo(() => {
+    const map = {};
+    occurrences.forEach((e) => {
+      const key = e.occurrenceDate;
+      if (!key) return;
+      (map[key] = map[key] || []).push(e);
+    });
+    // Sort each day by start time so the agenda reads chronologically
+    Object.keys(map).forEach((key) => {
+      map[key].sort((a, b) => {
+        const aKey = `${a.startTime || a.time || '99:99'}`;
+        const bKey = `${b.startTime || b.time || '99:99'}`;
+        return aKey.localeCompare(bKey);
+      });
+    });
+    return map;
+  }, [occurrences]);
 
   const itemsForDate = (date) => {
     const list = eventsByDate[formatDateKey(date)] || [];
@@ -127,6 +186,15 @@ export default function AdminCalendar() {
     setCurrentDate(now);
     setSelectedDate(now);
   };
+
+  const detailStyle = styleForType(selectedItem?.type);
+  const DetailIcon = detailStyle.icon;
+  const detailRecurrence = selectedItem?.recurringRule
+    ? describeRecurrence(
+        selectedItem.recurringRule,
+        selectedItem.startDate || selectedItem.date
+      )
+    : '';
 
   return (
     <div style={{ maxWidth: '1500px', margin: '0 auto', padding: '24px' }}>
@@ -234,7 +302,7 @@ export default function AdminCalendar() {
 
         {/* Weekday labels */}
         <div className="admin-cal-weekdays" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', fontWeight: 700, fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d}>{d}</div>)}
+          {WEEKDAY_SHORT.map(d => <div key={d}>{d}</div>)}
         </div>
 
         {/* Days grid */}
@@ -287,15 +355,19 @@ export default function AdminCalendar() {
                     return (
                       <span
                         key={`chip-${i}`}
-                        title={`${s.label}: ${item.title}${item.time ? ` (${item.time})` : ''}`}
+                        onClick={(e) => { e.stopPropagation(); setSelectedItem(item); }}
+                        title={`${s.label}: ${item.title}${formatTime(item) ? ` (${formatTime(item)})` : ''}`}
                         style={{
-                          display: 'block', width: '100%', background: s.bg, color: s.text,
+                          display: 'flex', alignItems: 'center', gap: '3px', width: '100%',
+                          background: s.bg, color: s.text,
                           borderRadius: '4px', borderLeft: `3px solid ${s.bar}`, padding: '2px 5px',
                           fontSize: '10.5px', fontWeight: 600, lineHeight: 1.3,
-                          whiteSpace: 'normal', wordBreak: 'break-word', textAlign: 'left'
+                          whiteSpace: 'normal', wordBreak: 'break-word', textAlign: 'left',
+                          cursor: 'pointer'
                         }}
                       >
-                        {item.title}
+                        {item.isRecurring && <Repeat size={9} style={{ flexShrink: 0 }} />}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.title}</span>
                       </span>
                     );
                   })}
@@ -313,9 +385,19 @@ export default function AdminCalendar() {
 
       {/* Day agenda */}
       <div className="card shadow-sm" style={{ border: '1px solid var(--border)', background: '#ffffff', borderRadius: '16px', padding: '20px' }}>
-        <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: 800, borderBottom: '1px solid var(--border)', paddingBottom: '10px', color: 'var(--text)' }}>
-          Agenda for {selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
-        </h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>
+          <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: 'var(--text)' }}>
+            Agenda for {selectedDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
+          </h3>
+          {selectedDayItems.length > 0 && (
+            <span style={{
+              fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '999px',
+              background: 'rgba(16, 139, 81, 0.1)', color: 'var(--primary)'
+            }}>
+              {selectedDayItems.length} item{selectedDayItems.length === 1 ? '' : 's'}
+            </span>
+          )}
+        </div>
 
         {loading ? (
           <p style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '30px 0' }}>Loading events...</p>
@@ -333,8 +415,8 @@ export default function AdminCalendar() {
               const rsvpCount = Object.keys(e.rsvps || e.rsvp || {}).length;
               return (
                 <div
-                  key={e.id}
-                  onClick={() => navigate('/events')}
+                  key={`${e.id}-${e.occurrenceDate}`}
+                  onClick={() => setSelectedItem(e)}
                   style={{
                     padding: '16px', borderRadius: '12px', border: '1px solid var(--border-light, #f1f5f9)',
                     background: '#f8fafc', cursor: 'pointer', borderLeft: `4px solid ${s.bar}`
@@ -349,11 +431,14 @@ export default function AdminCalendar() {
                       <Icon size={11} /> {s.label}
                     </span>
                     <span style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Clock size={12} /> {e.isAllDay ? 'All Day' : (e.time || 'TBA')}
+                      <Clock size={12} /> {formatTime(e)}
                     </span>
                   </div>
 
-                  <h4 style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 700, color: 'var(--text)' }}>{e.title}</h4>
+                  <h4 style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 700, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {e.title}
+                    {e.isRecurring && <Repeat size={12} color="var(--text-secondary)" />}
+                  </h4>
 
                   {e.location && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
@@ -377,6 +462,137 @@ export default function AdminCalendar() {
           </div>
         )}
       </div>
+
+      {/* Event details modal */}
+      <Modal
+        open={!!selectedItem}
+        onClose={() => setSelectedItem(null)}
+        title={selectedItem ? styleForType(selectedItem.type).label : 'Event Details'}
+      >
+        {selectedItem && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
+              <div style={{
+                width: '40px', height: '40px', borderRadius: '20px', flexShrink: 0,
+                background: detailStyle.bg, color: detailStyle.text,
+                display: 'flex', alignItems: 'center', justifyContent: 'center'
+              }}>
+                <DetailIcon size={20} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <h2 style={{ fontSize: '18px', fontWeight: 800, margin: '0 0 6px 0', color: 'var(--text)' }}>
+                  {selectedItem.title}
+                </h2>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <span style={{
+                    fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
+                    background: detailStyle.bg, color: detailStyle.text, textTransform: 'uppercase'
+                  }}>
+                    {detailStyle.label}
+                  </span>
+                  {selectedItem.isRecurring && (
+                    <span style={{
+                      fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
+                      background: '#f1f5f9', color: 'var(--text-secondary)',
+                      display: 'inline-flex', alignItems: 'center', gap: '4px'
+                    }}>
+                      <Repeat size={10} /> Recurring
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button className="btn-icon" onClick={() => setSelectedItem(null)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                <CalendarDays size={16} color="var(--primary)" style={{ marginTop: '2px', flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-lighter)' }}>Date</div>
+                  <div style={{ fontWeight: 600, color: 'var(--text)' }}>
+                    {formatLongDate(selectedItem.occurrenceDate || selectedItem.startDate || selectedItem.date)}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                <Clock size={16} color="var(--primary)" style={{ marginTop: '2px', flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-lighter)' }}>Time</div>
+                  <div style={{ fontWeight: 600, color: 'var(--text)' }}>{formatTime(selectedItem)}</div>
+                </div>
+              </div>
+
+              {selectedItem.location && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  <MapPin size={16} color="var(--primary)" style={{ marginTop: '2px', flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-lighter)' }}>Location</div>
+                    <div style={{ fontWeight: 600, color: 'var(--text)' }}>{selectedItem.location}</div>
+                  </div>
+                </div>
+              )}
+
+              {(selectedItem.assignedGroupName || selectedItem.assignedUserName) && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  <Users size={16} color="var(--primary)" style={{ marginTop: '2px', flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-lighter)' }}>Assigned to</div>
+                    <div style={{ fontWeight: 600, color: 'var(--text)' }}>
+                      {selectedItem.openToAll
+                        ? 'Everyone in the club'
+                        : selectedItem.assignedGroupName || selectedItem.assignedUserName}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {detailRecurrence && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  <Repeat size={16} color="var(--primary)" style={{ marginTop: '2px', flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-lighter)' }}>Repeats</div>
+                    <div style={{ fontWeight: 600, color: 'var(--text)' }}>{detailRecurrence}</div>
+                  </div>
+                </div>
+              )}
+
+              {selectedItem.category && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  <Tag size={16} color="var(--primary)" style={{ marginTop: '2px', flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-lighter)' }}>Category</div>
+                    <div style={{ fontWeight: 600, color: 'var(--text)', textTransform: 'capitalize' }}>{selectedItem.category}</div>
+                  </div>
+                </div>
+              )}
+
+              {selectedItem.description && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  <AlignLeft size={16} color="var(--primary)" style={{ marginTop: '2px', flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-lighter)' }}>Notes</div>
+                    <div style={{ color: 'var(--text)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                      {selectedItem.description}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+              <button className="btn btn-outline" onClick={() => setSelectedItem(null)}>
+                Close
+              </button>
+              <button className="btn btn-primary" onClick={() => navigate('/events')}>
+                Manage Events
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

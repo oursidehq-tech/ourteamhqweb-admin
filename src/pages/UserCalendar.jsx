@@ -3,8 +3,16 @@ import { collection, doc, getDocs, updateDoc } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useClub } from '../context/ClubContext';
 import { useAuth } from '../context/AuthContext';
-import { ChevronLeft, ChevronRight, Calendar, MapPin, Clock, Check, X, HelpCircle, Trophy, Users, ListChecks } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar, MapPin, Clock, Check, X, HelpCircle, Repeat } from 'lucide-react';
 import Modal from '../components/Modal';
+import {
+  buildOccurrenceDates,
+  describeRecurrence,
+  hasRecurrence,
+  todayIsoDate,
+  toIsoDateLocal,
+  parseIsoDate,
+} from '../utils/recurrence';
 
 export default function UserCalendar() {
   const { selectedClubId, selectedClub } = useClub();
@@ -93,83 +101,162 @@ export default function UserCalendar() {
   // Convert Firebase Date / string into pure YYYY-MM-DD
   const formatLocalDateString = (date) => {
     if (!date) return '';
+    if (typeof date === 'string') {
+      const parsed = parseIsoDate(date);
+      return parsed ? toIsoDateLocal(parsed) : '';
+    }
     const d = new Date(date);
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${d.getFullYear()}-${m}-${day}`;
+    if (Number.isNaN(d.getTime())) return '';
+    return toIsoDateLocal(d);
   };
 
-  // Aggregate items by date
-  const getItemsForDate = (date) => {
-    if (!date) return [];
-    const dateStr = formatLocalDateString(date);
+  // ─── Recurrence expansion ───────────────────────────────────────
+  // Expand events / rosters / tasks (including recurring ones) into dated
+  // occurrences covering the visible month, so recurring items appear on
+  // every matching day instead of only on their anchor date.
+  const monthRangeStart = useMemo(
+    () => toIsoDateLocal(new Date(year, month, 1)),
+    [year, month]
+  );
+  const monthRangeEnd = useMemo(
+    () => toIsoDateLocal(new Date(year, month, daysInMonth)),
+    [year, month, daysInMonth]
+  );
 
-    const dayEvents = events.filter(e => e.date === dateStr).map(e => ({
-      ...e,
-      itemType: 'event',
-      primaryType: e.type === 'match' || e.type === 'game' ? 'Match' : 'Event'
-    }));
+  const occurrences = useMemo(() => {
+    const out = [];
 
-    const dayShifts = [];
-    rosters.filter(r => r.date === dateStr).forEach(r => {
-      (r.shifts || []).forEach(s => {
-        dayShifts.push({
-          ...s,
-          itemType: 'shift',
-          rosterId: r.id,
-          rosterTitle: r.title,
-          date: r.date
+    // Club events & fixtures
+    (events || []).forEach((event) => {
+      const baseDate = event.startDate || event.date;
+      if (!baseDate) return;
+      const dates = buildOccurrenceDates(
+        baseDate,
+        event.recurringRule,
+        monthRangeStart,
+        monthRangeEnd,
+        { endDate: event.endDate || event.date }
+      );
+      dates.forEach((occurrenceDate) => {
+        out.push({
+          ...event,
+          date: occurrenceDate,
+          occurrenceDate,
+          itemType: 'event',
+          primaryType: event.type === 'match' || event.type === 'game' ? 'Match' : 'Event',
+          isRecurring: hasRecurrence(event.recurringRule),
         });
       });
     });
 
-    const dayTasks = tasks.filter(t => t.dueDate === dateStr).map(t => ({
-      ...t,
-      itemType: 'task'
-    }));
-
-    return [...dayEvents, ...dayShifts, ...dayTasks];
-  };
-
-  // Filtered lists of items based on chosen activeFilter
-  const allFilteredItems = useMemo(() => {
-    let list = [];
-    events.forEach(e => {
-      list.push({ ...e, itemType: 'event', primaryType: e.type === 'match' || e.type === 'game' ? 'Match' : 'Event' });
-    });
-
-    rosters.forEach(r => {
-      (r.shifts || []).forEach(s => {
-        list.push({ ...s, itemType: 'shift', rosterId: r.id, rosterTitle: r.title, date: r.date });
+    // Volunteer shifts (one entry per shift per occurrence)
+    (rosters || []).forEach((roster) => {
+      if (!roster?.date) return;
+      const dates = buildOccurrenceDates(
+        roster.date,
+        roster.recurringRule,
+        monthRangeStart,
+        monthRangeEnd
+      );
+      const shifts = Array.isArray(roster.shifts) ? roster.shifts : [];
+      dates.forEach((occurrenceDate) => {
+        if (shifts.length === 0) {
+          out.push({
+            itemType: 'shift',
+            rosterId: roster.id,
+            rosterTitle: roster.title,
+            role: roster.title || 'Shift',
+            date: occurrenceDate,
+            occurrenceDate,
+            isRecurring: hasRecurrence(roster.recurringRule),
+          });
+          return;
+        }
+        shifts.forEach((shift) => {
+          out.push({
+            ...shift,
+            itemType: 'shift',
+            rosterId: roster.id,
+            rosterTitle: roster.title,
+            date: occurrenceDate,
+            occurrenceDate,
+            isRecurring: hasRecurrence(roster.recurringRule),
+          });
+        });
       });
     });
 
-    tasks.forEach(t => {
-      list.push({ ...t, itemType: 'task', date: t.dueDate });
+    // Assigned checklist tasks
+    (tasks || []).forEach((task) => {
+      const baseDate = task.startDate || task.dueDate;
+      if (!baseDate) return;
+      const dates = buildOccurrenceDates(
+        baseDate,
+        task.recurringRule,
+        monthRangeStart,
+        monthRangeEnd,
+        { endDate: task.endDate || task.dueDate }
+      );
+      dates.forEach((occurrenceDate) => {
+        out.push({
+          ...task,
+          date: occurrenceDate,
+          occurrenceDate,
+          itemType: 'task',
+          isRecurring: hasRecurrence(task.recurringRule),
+        });
+      });
     });
 
-    return list.filter(item => {
-      if (activeFilter === 'All') return true;
-      if (activeFilter === 'Matches') return item.itemType === 'event' && (item.type === 'match' || item.type === 'game');
-      if (activeFilter === 'Training') return item.itemType === 'event' && item.type === 'training';
-      if (activeFilter === 'Shifts') return item.itemType === 'shift';
-      if (activeFilter === 'Tasks') return item.itemType === 'task';
-      return true;
+    return out;
+  }, [events, rosters, tasks, monthRangeStart, monthRangeEnd]);
+
+  // Aggregate occurrences by date
+  const itemsByDate = useMemo(() => {
+    const map = {};
+    occurrences.forEach((item) => {
+      const key = item.occurrenceDate;
+      if (!key) return;
+      (map[key] = map[key] || []).push(item);
     });
-  }, [events, rosters, tasks, activeFilter]);
+    // Sort each day chronologically
+    Object.keys(map).forEach((key) => {
+      map[key].sort((a, b) => {
+        const aKey = `${a.startTime || a.time || '99:99'}`;
+        const bKey = `${b.startTime || b.time || '99:99'}`;
+        return aKey.localeCompare(bKey);
+      });
+    });
+    return map;
+  }, [occurrences]);
+
+  const getItemsForDate = (date) => {
+    if (!date) return [];
+    return itemsByDate[formatLocalDateString(date)] || [];
+  };
+
+  const matchesFilter = (item) => {
+    if (activeFilter === 'All') return true;
+    if (activeFilter === 'Matches') return item.itemType === 'event' && (item.type === 'match' || item.type === 'game');
+    if (activeFilter === 'Training') return item.itemType === 'event' && item.type === 'training';
+    if (activeFilter === 'Shifts') return item.itemType === 'shift';
+    if (activeFilter === 'Tasks') return item.itemType === 'task';
+    return true;
+  };
+
+  // Filtered lists of items based on chosen activeFilter
+  const allFilteredItems = useMemo(
+    () => occurrences.filter(matchesFilter),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [occurrences, activeFilter]
+  );
 
   // Items for the currently selected day
-  const selectedDayItems = useMemo(() => {
-    const items = getItemsForDate(selectedDate);
-    return items.filter(item => {
-      if (activeFilter === 'All') return true;
-      if (activeFilter === 'Matches') return item.itemType === 'event' && (item.type === 'match' || item.type === 'game');
-      if (activeFilter === 'Training') return item.itemType === 'event' && item.type === 'training';
-      if (activeFilter === 'Shifts') return item.itemType === 'shift';
-      if (activeFilter === 'Tasks') return item.itemType === 'task';
-      return true;
-    });
-  }, [selectedDate, events, rosters, tasks, activeFilter]);
+  const selectedDayItems = useMemo(
+    () => getItemsForDate(selectedDate).filter(matchesFilter),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedDate, itemsByDate, activeFilter]
+  );
 
   // Handle RSVP
   const handleRSVP = async (eventId, status) => {
@@ -296,15 +383,7 @@ export default function UserCalendar() {
   const itemTime = (item) => item.time || (item.startTime ? `${item.startTime}${item.endTime ? `–${item.endTime}` : ''}` : '');
 
   // Returns only the items that pass the current filter (used for cell chips)
-  const filteredItemsForDate = (date) =>
-    getItemsForDate(date).filter(item => {
-      if (activeFilter === 'All') return true;
-      if (activeFilter === 'Matches') return item.itemType === 'event' && (item.type === 'match' || item.type === 'game');
-      if (activeFilter === 'Training') return item.itemType === 'event' && item.type === 'training';
-      if (activeFilter === 'Shifts') return item.itemType === 'shift';
-      if (activeFilter === 'Tasks') return item.itemType === 'task';
-      return true;
-    });
+  const filteredItemsForDate = (date) => getItemsForDate(date).filter(matchesFilter);
 
   const goToToday = () => {
     const now = new Date();
@@ -318,9 +397,17 @@ export default function UserCalendar() {
     if (item.itemType === 'event') {
       setSelectedEventDetails(item);
     } else {
-      setSelectedDate(new Date(item.date));
+      const parsed = parseIsoDate(item.date);
+      if (parsed) setSelectedDate(parsed);
     }
   };
+
+  const detailRecurrence = selectedEventDetails?.recurringRule
+    ? describeRecurrence(
+        selectedEventDetails.recurringRule,
+        selectedEventDetails.startDate || selectedEventDetails.date
+      )
+    : '';
 
   return (
     <div style={{ maxWidth: '1500px', margin: '0 auto', padding: '24px' }}>
@@ -508,7 +595,9 @@ export default function UserCalendar() {
                           onClick={(e) => handleItemClick(item, e)}
                           title={`${style.label}: ${itemTitle(item)}${itemTime(item) ? ` (${itemTime(item)})` : ''}`}
                           style={{
-                            display: 'block',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '3px',
                             width: '100%',
                             background: style.bg,
                             color: style.text,
@@ -520,10 +609,12 @@ export default function UserCalendar() {
                             lineHeight: 1.3,
                             whiteSpace: 'normal',
                             wordBreak: 'break-word',
-                            textAlign: 'left'
+                            textAlign: 'left',
+                            cursor: 'pointer'
                           }}
                         >
-                          {itemTitle(item)}
+                          {item.isRecurring && <Repeat size={9} style={{ flexShrink: 0 }} />}
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{itemTitle(item)}</span>
                         </span>
                       );
                     })}
@@ -825,16 +916,22 @@ export default function UserCalendar() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>
                 <Calendar size={16} color="var(--primary)" />
-                <span>Date: {selectedEventDetails.date}</span>
+                <span>Date: {selectedEventDetails.occurrenceDate || selectedEventDetails.date}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>
                 <Clock size={16} color="var(--primary)" />
-                <span>Time: {selectedEventDetails.time || 'TBA'}</span>
+                <span>Time: {selectedEventDetails.isAllDay ? 'All Day' : (selectedEventDetails.time || selectedEventDetails.startTime || 'TBA')}</span>
               </div>
               {selectedEventDetails.location && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>
                   <MapPin size={16} color="var(--primary)" />
                   <span>Location: {selectedEventDetails.location}</span>
+                </div>
+              )}
+              {detailRecurrence && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  <Repeat size={16} color="var(--primary)" />
+                  <span>Repeats: {detailRecurrence}</span>
                 </div>
               )}
             </div>
