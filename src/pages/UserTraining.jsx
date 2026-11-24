@@ -401,9 +401,6 @@ export default function UserTraining() {
             <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 800, color: '#0F172A' }}>
               Training Center
             </h1>
-            <span style={{ fontSize: '11px', fontWeight: 600, background: '#0D9488', color: '#FFFFFF', padding: '3px 10px', borderRadius: '999px' }}>
-              Concept • Example data
-            </span>
           </div>
           <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748B' }}>
             Coach workspace
