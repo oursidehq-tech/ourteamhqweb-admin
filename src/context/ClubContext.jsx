@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
-import { collection, onSnapshot, doc, getDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, getDoc, getDocs, setDoc, deleteDoc, query, where, serverTimestamp } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuth } from './AuthContext';
 
@@ -62,12 +62,25 @@ export function ClubProvider({ children }) {
 
     let cancelled = false;
 
+    const userEmail = String(user?.email || profile?.email || '').trim().toLowerCase();
+
+    const isClubOwnerMatch = (club) => {
+      if (club.ownerId === user.uid || club.createdBy === user.uid || club.adminUid === user.uid) return true;
+      if (userEmail && String(club.contact?.email || club.adminEmail || '').trim().toLowerCase() === userEmail) return true;
+      if (Array.isArray(club.keyPeople)) {
+        return club.keyPeople.some(kp =>
+          kp?.uid === user.uid || (userEmail && String(kp?.email || '').trim().toLowerCase() === userEmail)
+        );
+      }
+      return false;
+    };
+
     const discover = async () => {
       const found = [];
 
-      // Check clubs where user is ownerId or createdBy
+      // 1. Check clubs where user is ownerId, createdBy, contact email, or in keyPeople
       for (const club of allClubs) {
-        if ((club.ownerId === user.uid || club.createdBy === user.uid) && !knownIds.has(club.id)) {
+        if (isClubOwnerMatch(club) && !knownIds.has(club.id)) {
           found.push({
             clubId: club.id,
             clubName: club.name || 'Club',
@@ -80,28 +93,86 @@ export function ClubProvider({ children }) {
         }
       }
 
-      // Probe clubs/{clubId}/members/{uid} for remaining clubs (allowed by Firestore rules if member)
+      // 2. Probe clubs/{clubId}/members/{uid} (and email/uid fallbacks) for remaining clubs
       const clubsToProbe = allClubs.filter(c => !knownIds.has(c.id));
       await Promise.all(
         clubsToProbe.map(async (club) => {
+          let mDocId = null;
+          let mData = null;
+
           try {
             const memberSnap = await getDoc(doc(db, 'clubs', club.id, 'members', user.uid));
             if (memberSnap.exists()) {
-              const mData = memberSnap.data();
-              const roles = Array.isArray(mData.roles) && mData.roles.length > 0
-                ? mData.roles
-                : [mData.role || 'Player'];
-              found.push({
-                clubId: club.id,
-                clubName: club.name || 'Club',
-                role: mData.role || roles[0] || 'Player',
-                roles,
-                teamIds: Array.isArray(mData.teamIds) ? mData.teamIds : [],
-                groupIds: Array.isArray(mData.groupIds) ? mData.groupIds : [],
-              });
+              mDocId = memberSnap.id;
+              mData = memberSnap.data();
             }
           } catch {
-            // Expected permission-denied for clubs the user does not belong to
+            // Expected permission-denied if not a member by UID
+          }
+
+          // Fallback: check email-keyed or query-matched member docs if permitted
+          if (!mData && userEmail) {
+            try {
+              const emailSnap = await getDoc(doc(db, 'clubs', club.id, 'members', userEmail));
+              if (emailSnap.exists()) {
+                mDocId = emailSnap.id;
+                mData = emailSnap.data();
+              }
+            } catch {
+              // Ignore permission-denied
+            }
+          }
+
+          if (!mData) {
+            try {
+              const membersRef = collection(db, 'clubs', club.id, 'members');
+              const uidSnap = await getDocs(query(membersRef, where('uid', '==', user.uid)));
+              if (!uidSnap.empty) {
+                mDocId = uidSnap.docs[0].id;
+                mData = uidSnap.docs[0].data();
+              } else if (userEmail) {
+                const emailQuerySnap = await getDocs(query(membersRef, where('email', '==', userEmail)));
+                if (!emailQuerySnap.empty) {
+                  mDocId = emailQuerySnap.docs[0].id;
+                  mData = emailQuerySnap.docs[0].data();
+                }
+              }
+            } catch {
+              // Ignore permission-denied
+            }
+          }
+
+          if (mData) {
+            // Self-heal: ensure member doc is keyed by user.uid for Firestore security rules
+            if (mDocId && mDocId !== user.uid) {
+              try {
+                await setDoc(doc(db, 'clubs', club.id, 'members', user.uid), {
+                  ...mData,
+                  uid: user.uid,
+                  userId: user.uid,
+                  email: userEmail || mData.email || '',
+                  joinedAt: mData.joinedAt || serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                }, { merge: true });
+                if (mDocId.includes('@')) {
+                  await deleteDoc(doc(db, 'clubs', club.id, 'members', mDocId));
+                }
+              } catch {
+                // Best-effort migration
+              }
+            }
+
+            const roles = Array.isArray(mData.roles) && mData.roles.length > 0
+              ? mData.roles
+              : [mData.role || 'Player'];
+            found.push({
+              clubId: club.id,
+              clubName: club.name || 'Club',
+              role: mData.role || roles[0] || 'Player',
+              roles,
+              teamIds: Array.isArray(mData.teamIds) ? mData.teamIds : [],
+              groupIds: Array.isArray(mData.groupIds) ? mData.groupIds : [],
+            });
           }
         })
       );

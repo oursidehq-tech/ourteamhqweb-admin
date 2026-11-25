@@ -13,23 +13,46 @@ const SUPER_ADMIN_PASSWORD = 'admin@2026';
 const ADMIN_PIN = 'OurTeamHQ@2026'; // Shared PIN for ALL admin types
 
 const getNormalizedMemberships = (userData) => {
-  const list = Array.isArray(userData?.clubMemberships) ? [...userData.clubMemberships] : [];
-  const fallbackClubId = String(userData?.clubId || '').trim();
-  if (fallbackClubId && !list.some(m => m?.clubId === fallbackClubId)) {
-    const accountType = String(userData?.accountType || '').toLowerCase();
-    const fallbackRole = accountType.includes('owner')
-      ? 'Owner'
-      : accountType.includes('admin')
-        ? 'Admin'
-        : (userData?.role || 'Player');
-    list.push({
-      clubId: fallbackClubId,
-      clubName: userData?.clubName || '',
-      role: fallbackRole,
-      roles: [fallbackRole],
-    });
-  }
-  return list.filter(m => m && m.clubId);
+  const rawList = Array.isArray(userData?.clubMemberships)
+    ? userData.clubMemberships
+    : (Array.isArray(userData?.memberships) ? userData.memberships : []);
+
+  const list = rawList
+    .map((m) => {
+      if (!m) return null;
+      if (typeof m === 'string') {
+        const id = m.trim();
+        return id ? { clubId: id, clubName: '', role: 'Player', roles: ['Player'] } : null;
+      }
+      const clubId = String(m.clubId || m.id || '').trim();
+      return clubId ? { ...m, clubId } : null;
+    })
+    .filter(Boolean);
+
+  const accountType = String(userData?.accountType || '').toLowerCase();
+  const fallbackRole = accountType.includes('owner')
+    ? 'Owner'
+    : accountType.includes('admin')
+      ? 'Admin'
+      : (userData?.role || 'Player');
+
+  const extraIds = [
+    String(userData?.clubId || '').trim(),
+    ...(Array.isArray(userData?.clubIds) ? userData.clubIds.map(id => String(id || '').trim()) : []),
+  ].filter(Boolean);
+
+  extraIds.forEach((cid) => {
+    if (!list.some(m => m.clubId === cid)) {
+      list.push({
+        clubId: cid,
+        clubName: userData?.clubName || '',
+        role: fallbackRole,
+        roles: [fallbackRole],
+      });
+    }
+  });
+
+  return list;
 };
 
 const deriveClubRoleIds = (memberships) => {
