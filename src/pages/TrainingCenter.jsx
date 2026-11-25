@@ -4,7 +4,7 @@ import {
   Trash2, Globe, Edit2, Play, ExternalLink, Clock, Eye, Download,
   CheckCircle, ClipboardList, GripVertical, X, ChevronDown, ChevronUp,
   Copy, CalendarDays, Users, Save, Layers, ArrowLeft, BookOpen,
-  AlertTriangle, Tag, Timer, StickyNote, PlusCircle, Zap, LayoutList,
+  AlertTriangle, AlertCircle, Tag, Timer, StickyNote, PlusCircle, Zap, LayoutList,
   Lock, ArrowUp, ArrowDown, CheckSquare, Square
 } from 'lucide-react';
 import { useClub } from '../context/ClubContext';

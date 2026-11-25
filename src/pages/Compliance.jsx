@@ -186,10 +186,10 @@ const Compliance = () => {
     return list;
   }, [complianceData, activeTab, filterExpiringSoon]);
 
-  const activeDoc = selectedDoc || (filteredData.length > 0 ? filteredData[0] : sampleRecords[0]);
+  const activeDoc = selectedDoc || (filteredData.length > 0 ? filteredData[0] : null);
 
   const handleExportCSV = () => {
-    const listToExport = complianceData.length > 0 ? complianceData : sampleRecords;
+    const listToExport = complianceData;
     const headers = ['Member', 'Role', 'Team', 'Requirement', 'Submitted', 'Expiry', 'Status'];
     const rows = listToExport.map(r => [
       r.name || '',
