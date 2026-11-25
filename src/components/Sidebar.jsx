@@ -108,14 +108,15 @@ const userSections = [
 
 export default function Sidebar({ isCollapsed, onToggle, mobileOpen, onCloseMobile }) {
   const { logout, isOwnerOf, hasRole, profile, isSuperAdmin, portalMode, setPortalMode, adminClubIds } = useAuth();
-  const { selectedClubId } = useClub();
+  const { selectedClubId, activeMembership: clubMembership } = useClub();
   const navigate = useNavigate();
   const isOwner = selectedClubId ? isOwnerOf(selectedClubId) : false;
 
-  const activeMembership = profile?.clubMemberships?.find(m => m.clubId === selectedClubId);
-  const activeRole = isSuperAdmin 
-    ? 'Super Admin' 
-    : (activeMembership ? (activeMembership.roles ? activeMembership.roles.join(', ') : activeMembership.role) : 'Club Member');
+  const activeMembership = clubMembership || profile?.clubMemberships?.find(m => m.clubId === selectedClubId);
+  const membershipRole = activeMembership
+    ? ((Array.isArray(activeMembership.roles) && activeMembership.roles.length > 0 ? activeMembership.roles.join(', ') : activeMembership.role) || 'Club Member')
+    : 'Club Member';
+  const activeRole = isSuperAdmin ? 'Super Admin' : membershipRole;
 
   const handleLogout = () => {
     logout();
