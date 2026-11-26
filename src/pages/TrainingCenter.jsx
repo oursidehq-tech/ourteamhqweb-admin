@@ -1087,7 +1087,7 @@ function PlansList({
 
       {/* Main Split Grid: Table of Plans + Side Access Panel (Image 5) */}
       <div style={{ display: 'grid', gridTemplateColumns: selectedPlanForAccess ? '1.5fr 1fr' : '1fr', gap: '24px', alignItems: 'start' }}>
-        
+
         {/* Left: Table of Plans */}
         <div style={{ background: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: '16px', overflow: 'hidden' }}>
           <div className="table-toolbar" style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', padding: '12px 16px', display: 'flex', justifyContent: 'space-between' }}>
@@ -1135,8 +1135,8 @@ function PlansList({
               ) : filteredPlans.map(p => {
                 const isSelected = selectedPlanForAccess?.id === p.id;
                 const isShared = (p.sharedWithUserIds?.length || 0) + (p.sharedWithGroupIds?.length || 0) > 0;
-                const accessText = isShared 
-                  ? `Shared (${(p.sharedWithUserIds?.length || 0) + (p.sharedWithGroupIds?.length || 0)})` 
+                const accessText = isShared
+                  ? `Shared (${(p.sharedWithUserIds?.length || 0) + (p.sharedWithGroupIds?.length || 0)})`
                   : '• Private';
 
                 return (
